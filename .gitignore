@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Training outputs and data (data lives outside the repo, see DATA_ROOT)
+results/
+datasets/
+lightning_logs/
+
+# Exported models are large: commit only the threshold
+models/*.onnx
+models/*.xml
+models/*.bin

@@ -1,0 +1,8 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      # Swap models without rebuilding the image.
+      - ./models:/app/models:ro

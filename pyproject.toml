@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "industrial-anomaly-inspection"
+version = "0.1.0"
+description = "Visual inspection by unsupervised anomaly detection (MVTec AD): cost-based thresholding, CPU latency benchmark, Dockerized API."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+# Serving only: kept small so the Docker image does not ship PyTorch.
+serve = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "onnxruntime>=1.17",
+]
+# Training / evaluation: heavy, installed locally only (not in Docker, not in CI).
+train = [
+    "anomalib>=2.0",
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "onnx>=1.15",
+    "openvino>=2024.0",
+    "pandas>=2.0",
+    "matplotlib>=3.8",
+]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.4",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
