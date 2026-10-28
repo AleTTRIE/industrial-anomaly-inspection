@@ -28,22 +28,33 @@ Questions à pouvoir expliquer ensuite :
 - Pourquoi PatchCore n'a-t-il besoin que d'une seule "époque" d'entraînement ?
 - Que contient exactement le split de test de MVTec AD ?
 """
+
 import argparse
 import json
-from inspection.config import CATEGORIES, MODELS, DATA_ROOT, RESULTS_DIR
+
+from inspection.config import CATEGORIES, DATA_ROOT, MODELS, RESULTS_DIR
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train and test anomalib models on MVTec AD categories.")
-    parser.add_argument("--model", choices=MODELS, required=True, help="Name of the model to train.")
-    parser.add_argument("--category", choices=CATEGORIES, required=True, help="MVTec AD category to train on.")
+    parser = argparse.ArgumentParser(
+        description="Train and test anomalib models on MVTec AD categories."
+    )
+    parser.add_argument(
+        "--model", choices=MODELS, required=True, help="Name of the model to train."
+    )
+    parser.add_argument(
+        "--category", choices=CATEGORIES, required=True, help="MVTec AD category to train on."
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
     return parser.parse_args()
 
+
 def train(model_name, category, seed):
     from anomalib.data import MVTecAD
-    from anomalib.models import Patchcore, Padim
     from anomalib.engine import Engine
+    from anomalib.models import Padim, Patchcore
     from lightning import seed_everything
+
     seed_everything(seed)
 
     # 1. Load the dataset
@@ -65,6 +76,7 @@ def train(model_name, category, seed):
     results = engine.test(model=model, datamodule=datamodule)
     return results[0]
 
+
 def main():
     args = parse_args()
     print(args)
@@ -75,6 +87,7 @@ def main():
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(RESULTS_DIR / f"{args.model}_{args.category}_{args.seed}_results.json", "w") as f:
         json.dump(results, f, indent=2)
+
 
 if __name__ == "__main__":
     main()

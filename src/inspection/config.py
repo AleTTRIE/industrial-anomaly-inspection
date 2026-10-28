@@ -19,5 +19,11 @@ MODEL_PATH = Path(os.environ.get("MODEL_PATH", REPO_ROOT / "models" / "model.onn
 THRESHOLD_PATH = Path(os.environ.get("THRESHOLD_PATH", REPO_ROOT / "models" / "threshold.json"))
 
 # Starting categories: at least one texture and one object.
-CATEGORIES = ["bottle", "screw", "carpet", "metal_nut"]
+CATEGORIES_TYPES = {
+    "bottle": "object",
+    "screw": "object",
+    "carpet": "texture",
+    "metal_nut": "object",
+}
+CATEGORIES = list(CATEGORIES_TYPES.keys())
 MODELS = ["patchcore", "padim"]
