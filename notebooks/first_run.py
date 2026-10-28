@@ -1,6 +1,6 @@
 from anomalib.data import MVTecAD
-from anomalib.models import Patchcore
 from anomalib.engine import Engine
+from anomalib.models import Patchcore
 
 from inspection.config import DATA_ROOT
 
