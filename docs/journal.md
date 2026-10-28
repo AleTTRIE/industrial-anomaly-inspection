@@ -149,3 +149,91 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
 - Pourquoi le F1 de bottle n'est pas à 1, alors que le seuil a été réglé sur le test ?
 - Que donne l'AUPRO, la métrique pensée pour les petits défauts, plutôt que l'AUROC pixel ?
 - Est ce que l'impacte du premier patch varie en fonction des problèmes tel que bottle vs screw ? Et en fonction par exemple du ratio pour le coreset ?
+
+# Séance 3 : 23 au 27 octobre 2026, train.py et les 8 runs
+
+## Ligne de commande
+- argparse :
+  (À quoi ça sert ? `required` ou `default` : comment je choisis ? Que fait `choices` ?)
+  "argparse" permet de pouvoir passer des arguments/paramètres dans un script python.
+  "required" fait en sorte que l'on est obligé de donner une valeur pour un argument du script.
+  "default" fait en sorte que si il n'y a pas de valeur pour un argument, on met celui qui a été mis par défaut dans argparse.
+  "required" vs "default" : cela dépend de l'argument, par exemple, une graine peut être choisie par défaut car son importance n'est pas la même que pour le choix du model utilisé ou du dataset utilisé où l'on va plutot utilisé "required" 
+  `choices` permet de restreindre les choix possibles d'un argument.
+- `python -m inspection.train` contre `python src\...\train.py` :
+  (Différence ? Pourquoi `-m` ici ? Pourquoi `src.inspection` ne marche pas ?)
+  Avec `python -m`, on va chercher à executer un module python, alors que sans le `-m`, on l'execute le script.
+  `src` est un simple dossier de rangement, pas un paquet Python. C'est là où l'on va chercher les scripts où se trouve le code. C'est un standard.
+- `python3` sous Windows :
+  (Qu'est-ce qui s'est passé ?)
+  Pour pouvoir lancer les différents modèles, ils nous faut les librairies et donc l'environnement sauf que `python3` n'utilise pas l'environnement contruit mais un autre donc il faut utiliser `python`.
+
+## Organisation du code
+- Une fonction, un rôle :
+  (Pourquoi `train()` reçoit des valeurs et pas `args` ? Pourquoi le JSON est écrit dans `main()` ?)
+  `train()` reçoit des valeurs et pas `args`, car ce n'est pas le rôle de train, son objectif est de lancer l'entrainement d'un modèle avec le dataset donné. De plus, il devient plus difficile d'utiliser `train()` dans d'autres contextes avec `args`.
+  Dans le meme principe que dit précédemment, ce n'est pas le rôle de `train()` mais de l'appelant de décider de ce qu'il fait du résultat.
+- Imports :
+  (Lesquels en haut du fichier, lesquels dans `train()`, et pourquoi ?)
+  On choisit d'importer les standarts et les imports léger en haut du script car ils sont léger à importer alors que les autres plus lourd, on préfère les importer si c'est vraiment nécessaire. L'autre raison est que certain import ne s'installe pas avec le CI, ce qui créerait des erreurs et ne lancerait rien.
+- Code jamais exécuté :
+  (L'histoire de `model.export`, et la règle que j'en tire.)
+  Nous utilisions une méthode qui n'existait pas donc plutot que de la laisser et créer des erreurs si utilisé, nous l'avons enlevé.
+  code jamais exécuté = code cassé jusqu'à preuve du contraire, on le teste ou on le retire
+
+## Reproductibilité
+  (Expérience : deux runs avec la même graine, résultat ? Quelle cause de la séance 2 est confirmée ?)
+  Deux runs avec les mêmes paramètres ainsi que la meme seed donnent les mêmes résultats, ce qui coincide avec l'hypothèse de la scéance 2 (dans "Pièges à corriger plus tard") où l'on supposait que le choix du premier patch impactait les résultats, alors nous avions supposé que la seed permettrait de résoudre ce porblème car elle permettrait de garder le meme permier patch.
+
+## PatchCore contre PaDiM
+  (Tableau des 8 runs. Pourquoi PaDiM s'effondre sur screw ? Pourquoi égalité sur carpet ? Quels écarts sont dans le bruit de la graine ? Temps d'entraînement ?)
+  La raison de pourquoi PaDim s'effondre sur screw est en raison de son mécanisme où il doit modéliser chaque position de la grille par une gaussienne où pour screw, une case de l'image peut être du fond, un filetage ou bien la tête car les vis n'ont pas toujours les mêmes positions, il n'y a donc pas de "forme normal" par case. Ce qui est à l'inverse plutot bien gérer par PatchCore où on lui demande si il a déjà vu ce patch dans sa banque mémoire, ce qui n'implique pas la position.
+  Comment expliquer que le problème de carpet renvoie une quasi égalité ? Cela s'explique par la texture, où les motifs se répètent partout dans l'image, donc chaque case sera très similaire. Ici, la position ne porte pas d'informations particulières, ce qui permet à PaDiM de rivaliser avec PatchCore.
+  Nous avons pu remarquer avec le peu de run que l'on a fait avec des graines différentes, que celle-ci peut faire bouger les résultats d'environ 8e-3. Ce qui nous permet de dire que l'on ne peut pas dire quel modèle est meilleur pour bottle car la différence est inférieur à l'écart créé par le bruit, alors que ce n'est pas le cas pour screw où la différence est réelle. (FAUX, voir Plusieurs graines)
+  PaDiM prend environ 1min, et PatchCore de 2 à 4min.
+
+## Plusieurs graines
+| Model | Category | Type | Mean Image AUROC ± Std | Mean Pixel AUROC ± Std |
+|-------|----------|------|------------------------|------------------------|
+| padim | bottle | object | 0.997 ± 0.002 | 0.979 ± 0.001 |
+| patchcore | bottle | object | 1.000 ± 0.000 | 0.986 ± 0.000 |
+| padim | carpet | texture | 0.969 ± 0.013 | 0.989 ± 0.001 |
+| patchcore | carpet | texture | 0.987 ± 0.001 | 0.991 ± 0.000 |
+| padim | metal_nut | object | 0.956 ± 0.011 | 0.953 ± 0.008 |
+| patchcore | metal_nut | object | 0.998 ± 0.001 | 0.987 ± 0.000 |
+| padim | screw | object | 0.792 ± 0.038 | 0.977 ± 0.002 |
+| patchcore | screw | object | 0.964 ± 0.003 | 0.989 ± 0.000 |
+
+- Pourquoi refaire les runs avec plusieurs graines ?
+  (Qu'est-ce qu'une seule paire de runs ne permettait pas de conclure ?)
+  Refaire plusieurs runs nous permet de savoir l'impacte qu'à l'aléatoire. Une graine permet également de reproduire une run à l'identique, là où l'aléatoire a un impacte. Faire plusieurs runs nous permet également d'estimer le bruit et de connaitre de façon plus général les capacités du modèles.
+- Ce que j'ai mesuré :
+  (5 graines, quelles métriques, quel script ? Moyenne et écart-type.)
+  Nous avons utilisé 5 graines, deux statistiques (Moyenne et Ecart-type) sur deux métriques AUROC image et pixel, les deux modèles ainsi que 4 datasets, généré les 40 runs via `train.py` et analyser le tout via `summarize.py`. 
+  Nous pouvons remarquer en regardant le tableau que PatchCore est beaucoup plus stable vis-à-vis de l'aléatoire, ce qui n'est pas le cas de PaDiM (de 0 à 0.003 pour PatchCore et de 0.002 à 0.038 pour PaDiM). Meme PaDiM reste assez stable sur AUROC pixel (de 0 pour PatchCore et de 0.001 à 0.008 pour PaDiM).
+  Nous pouvons également remarquer que selon le problème/dataset, l'aléatoire a une part plus où moins importante, ce qui peut paraitre logique avec la difficulté des problèmes et hypothétiquement la taille des datasets.
+  Il est important de dire que les résultats que nous avions pour la graine 42 ne sont pas forcement les moyennes obtenues des différentes graines. 
+- `stdev` contre `pstdev` :
+  (Quelle différence ? Pourquoi n − 1 ici ?)
+  `stdev` travaille sur un échantillon (c'est stdev qui utilise "n-1").
+  `pstdev` travaille sur une population.
+  La raison du n-1 est que la moyenne est calculé sur ces mêmes graines, les valeurs sont donc en moyenne plus proches de leur propre moyenne que de la vraie, et diviser par n sous-estime l'écart. Diviser par n − 1 corrige ce biais.
+- Résultats :
+  (Écart-type de PatchCore contre PaDiM ? Qu'est-ce qui a changé par rapport aux conclusions avec la seule graine 42 : carpet, estimation du bruit ?)
+  Pour les textures tel que `carpet`, PatchCore est devant et plus stable pour image AUROC, PaDiM obtient des résultats qui varie plus. Alors que pour pixel AUROC, les deux modèles sont à peu près équivalent, les motifs qui se répètent au travers de l'images donc la position dans l'image n'a que peu d'influence.
+  Ces résultats ne sont pas les mêmes qu'avec la gaine 42 seule où l'on concluait sur une quasi-égalité.
+- Pourquoi PaDiM est-il instable ?
+  (Ce que fait `torch.randperm` dans le code de PaDiM. Pourquoi PatchCore est-il stable ?)
+  Pour PaDiM, 100 dimensions sont gardées au hasard parmi 448, sachant que certaines dimensions sont plus au moins informatives, leur influence varie et impacte les résultats. Quant à PatchCore, la seule vrai part de hasard est le premier patch choisi pour le coreset, mais son effet diminue en fonction du nombre de patchs gardés pour le coreset, par exemple, quelle est l'influence d'un patch parmi 20 000 d'entre eux (bottle). 
+- Comparer deux modèles :
+  (La méthode écart contre bruit, sur bottle et screw.)
+  Changer la seed fait bouger les scores de 0 à 0.003 pour PatchCore et de 0.002 à 0.038 pour PaDiM, donc:
+  - bottle (1.000 ± 0.000 vs 0.997 ± 0.002): la différence (0.003) est environ presque celle du bruit, donc aucun des modèles ne peuvent être différenciés;
+  - screw (0.964 ± 0.003 vs 0.792 ± 0.038): la différence (0.17) est plus de 4 fois le bruit, donc la différence est réelle.
+- Erreur de comparaison :
+  (Les backbones par défaut sont différents. Qu'est-ce que ça change à mes conclusions ?)
+  Les deux modèles n'utilisent pas la même base pour représenter les images donc nécessairement, il est plus difficile de comparer les méthodes à armes égales. On ne compare plus seulement la méthode pour retrouver l'erreur mais aussi la façon de représenter les images et leurs erreurs. Donc 2 problèmes et pas 1.
+
+## Questions ouvertes
+- Comparer PatchCore à PaDiM avec `backbone="wide_resnet50_2"`.
+- 5 graines suffisent-elles ?
