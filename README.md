@@ -1,5 +1,7 @@
 # Industrial anomaly inspection
 
+![CI](https://github.com/AleTTRIE/industrial-anomaly-inspection/actions/workflows/ci.yml/badge.svg)
+
 Unsupervised visual inspection on [MVTec AD](https://www.mvtec.com/company/research/datasets/mvtec-ad): the model learns from good parts only and flags anything that deviates.
 
 The focus is not on chasing state-of-the-art AUROC (most methods are above 98% on MVTec AD) but on what a production line needs:
