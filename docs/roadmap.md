@@ -1,11 +1,11 @@
 # Roadmap
 
 ## Week 1: baseline
-- [ ] Install training deps in a venv: `pip install -e ".[train,dev]"` (check the torch CPU/GPU wheel)
-- [ ] Download MVTec AD to `DATA_ROOT` (default: ../datasets/MVTecAD, next to the repo), ~5 GB
-- [ ] Check `train.py` imports against the installed anomalib version
-- [ ] PatchCore + PaDiM on bottle, screw, carpet, metal_nut: image and pixel AUROC
-- [ ] Results table in the README
+- [x] Install training deps in a venv: `pip install -e ".[train,dev]"` (check the torch CPU/GPU wheel)
+- [x] Download MVTec AD to `DATA_ROOT` (default: ../datasets/MVTecAD, next to the repo), ~5 GB
+- [x] Check `train.py` imports against the installed anomalib version
+- [x] PatchCore + PaDiM on bottle, screw, carpet, metal_nut: image and pixel AUROC
+- [x] Results table in the README
 
 ## Week 2: industrial angle
 - [ ] Hold-out split for threshold selection (no leak from the test set)

@@ -134,7 +134,7 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
 - Fuite du seuil :
   (val_split_mode = same_as_test : sur quelles images le seuil est réglé ? Pourquoi c'est un problème ?)
   Ici, avec same_as_test, la validation est une copie du test : le seuil a été réglé sur les mêmes images que celles qui mesurent le F1.
-  Le seuil est basé sur les données de validations. Basé le seuil sur le test, biaserait les résultats vers le test, ce qui nous permettrait pas de savoir si le seuil est si bien que ça, car les mesures pour juger de si le système marche se base sur les données de test.
+  Le seuil est basé sur les données de validations. Basé le seuil sur le test, biaiserait les résultats vers le test, ce qui nous permettrait pas de savoir si le seuil est si bien que ça, car les mesures pour juger de si le système marche se base sur les données de test.
   Si une personne connait les questions de l'examen d'histoire en avance et a une bonne note, peut on vraiment dire qu'il maitrise le sujet ?
   L'AUROC ne serait pas impacté car il ne choisit pas de seuil, alors que le F1 se basera sur les résultats données avec le seuil utilisé, il sera donc optimiste.
   C'est le travail de la 2e semaine où nous séparerons les données validation des données test.
@@ -237,3 +237,69 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
 ## Questions ouvertes
 - Comparer PatchCore à PaDiM avec `backbone="wide_resnet50_2"`.
 - 5 graines suffisent-elles ?
+
+
+
+# Séance 4 : 29 octobre 2026, choisir le seuil
+
+## Pourquoi un split de validation
+- D'où viennent les images pour choisir le seuil ?
+  (Que contient le train de MVTec ? Où sont les seules images défectueuses ?)
+  Actuellement les images pour choisir le seuil viennent du dataset de test. 
+  Les images défectueuses sont dans le dataset test et pas train, car le dataset train est utilisé pour définir ce qu'est une bonne pièce, en mettre des mauvaises ferait que des mauvaises pièces seraient jugées comme bonnes.
+- Pourquoi les retirer de la mesure finale ?
+  (Lien avec la fuite `same_as_test` de la séance 2.)
+  Il faut retirer les images qui ont servi au choix du seuil car ce choix est biaisé et donnera un resultat optimiste.
+  L'idée serait donc de créer un dataset de validation extrait du dataset de test. ("extrait" donc plus dans le dataset de test)
+- Le prix à payer :
+  (Qu'est-ce qu'on perd en taillant la validation dans le test ?)
+  Le coût, c'est de réduire les données utilisées pour juger le modèle. Par exemple, avec 20 good, le taux de faux rejet évolue de 5% en fonction du nombre de faux rejet alors qu'avec 10 good, ce serait 10%, donc on aurait une analyse moins précise du modèle. Ce serait pareil pour les autres métriques.
+
+## Stratifier
+- Le risque d'un découpage au hasard :
+  (Un défaut rare entièrement d'un côté : que se passe-t-il dans chacun des deux cas ?)
+  Un découpage au hasard pourrait par exemple mettre de côté un défaut rare que ce soit dans le dataset de validation ou de test, ce qui causerait un mauvais choix de seuil ou une mesure imprécise du modèle. 
+- Stratifier sur quoi ?
+  (Quels groupes ? Quelle fonction en Python ?)
+  Pour éviter d'oublier des défauts dans un dataset, il faudrait s'assurer de une moitié de chaque groupe pour chaque dataset où un groupe serait soit un type de défauts soit les bonnes pièces.
+  La fonction utilisée serait `sklearn.model_selection.train_test_split(..., stratify=types, random_state=...)`
+- Vocabulaire :
+  (Positif et négatif dans ce projet.)
+  Dans ce projet, nous cherchons à détecter les anomalies, donc les positifs sont les pièces défectueuses et les négatifs sont les bonnes pièces.
+
+## Petits effectifs
+- Que vaut une bonne pièce rejetée dans le taux de faux rejets ?
+  (Avec 20 good, puis avec 10 good.)
+  Un faux rejet couterait 10% sur le taux de faux rejet avec 10 good, contre 5% avec 20 good.
+- Ce que j'en tire pour mes résultats :
+  (Paliers, comptes avec les taux, pareil pour le rappel ?)
+  Moins de données rend moins précis l'analyse du modèle. Plus y a de bonnes données variées, plus l'analyse sera précise.
+  Avec 10 good, le taux de faux rejets évolue de 10% par paliers, donc si on a 0 faux rejets dans notre analyse, on ne sait pas différencier 0% de 8%.
+  Avec le rappel, le problème est plus fin car nous avons plus de données sur les pièces défectueuses dans le dataset de test. Avec environ 31 mauvaises pièces, on aurait des paliers de 3%.
+
+
+## Le seuil par le coût
+- La règle de décision :
+  (Quand une pièce est-elle KO ? Que fait baisser le seuil ?)
+  Une pièce est dite KO quand son score est supérieur ou égal au seuil choisi, car plus on se rapproche de 0 plus on ressemble à une bonne pièce.
+  Baisser le seuil impliquerait d'accepter plus de faux rejet (rejet de bonnes pièces) mais rejeter aussi plus de mauvaises pièces.
+- `cost_fn=10` contre `cost_fn=1` :
+  (Le seuil monte ou descend ? Pourquoi ?)
+  Avec cost_fn=10 contre cost_fn=1, le seuil va privilégier le fait de corriger les défauts non détectés par rapport aux bonnes pièces rejetées, le seuil descend donc.
+- Pourquoi pas le seuil qui maximise le F1 ?
+  (Que suppose le F1 sur le coût des deux erreurs ?)
+  `F1 = 2·TP / (2·TP + FP + FN)`, où FP sont les bonnes pièces rejetées et les FN sont les défauts ratés.
+  Dans le dénominateur de `F1`, `FP` et `FN` comptent pour 1 et `TP` 2, alors `FP` et `FN` ont le même poids, 1, donc cela implique que rater un défaut ou rejeter une bonne pièce fait baisser le F1 exactement autant. Cela suppose que les deux types d'erreurs se valent alors qu'en production, on préfère éviter plus les défauts ratés que les bonnes pièces rejetées.
+  En conclusion, le F1 suppose `cost_fn = cost_fp`, alors que la règle par le coût nous laisse fixer ce rapport (10, 100…).
+  Autre limite : L'immense majorité des pièces sont bonnes (les TN). F1 ne le prend pas en compte. Faire passer plus de bonnes pièces ne change rien au F1.
+
+## Récupérer les scores
+- Le checkpoint :
+  (Où anomalib l'écrit-il ? Comment le recharger ?)
+  ???
+- Ce que renvoie `engine.predict` :
+  (Type, champs utiles : score, label, chemin. Comment je retrouve le type de défaut ?)
+  ???
+
+## Questions ouvertes
+- Est ce que stratifier sur les positions des bonnes pièces quand nécessaire serait une bonne idée ? (tel que `screw`)
