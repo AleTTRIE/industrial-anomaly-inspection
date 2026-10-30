@@ -41,8 +41,8 @@ def operating_points(
         raise ValueError("need both good and defective samples")
 
     # Candidates: midpoints between unique scores, plus -inf and +inf to flag everything or nothing.
-    a = np.concatenate([[-np.inf], np.unique(scores), [np.inf]])
-    candidates = (a[:-1] + a[1:]) * 0.5  # midpoints between unique scores
+    sorted_scores = np.concatenate([[-np.inf], np.unique(scores), [np.inf]])
+    candidates = (sorted_scores[:-1] + sorted_scores[1:]) * 0.5
     points = []
     for t in candidates:
         flagged = scores >= t
