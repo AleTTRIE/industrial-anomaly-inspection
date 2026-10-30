@@ -293,13 +293,69 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
   En conclusion, le F1 suppose `cost_fn = cost_fp`, alors que la règle par le coût nous laisse fixer ce rapport (10, 100…).
   Autre limite : L'immense majorité des pièces sont bonnes (les TN). F1 ne le prend pas en compte. Faire passer plus de bonnes pièces ne change rien au F1.
 
+## Le seuil collé au défaut
+- Le bug :
+  (Quels étaient les seuils candidats ? Quel seuil était choisi sur bottle ? Que devient un nouveau défaut à 37 ?)
+  Les seuils candidats précedemment étaient les scores uniques des différentes pièces.
+  Le seuil qui était choisi était le score minimum des pièces défectueuses (38), cela impliquait qu'une pièce défectueuse avec un score légèrement plus faible (exemple 37), meme minime, était comptée comme non défectueuse. 
+- Pourquoi c'est le pire côté :
+  (Avec `cost_fn=10`, de quel côté faut-il garder de la marge ?)
+  En production, on préfère rejeter des bonnes pièces qu'accepter des pièces défectueuses mais le choix de seuil actuel faisait l'inverse (score minimum des pièces défectueuses). Il faut plutot un seuil qui s'approche du score maximum des bonnes pièces.
+- Pourquoi les tests ne l'ont pas vu :
+  (Qu'est-ce qu'ils vérifiaient ? Qu'est-ce qu'ils ne vérifiaient pas ?)
+  Ils vérifiaient que les seuils fonctionnaient mais ils ne regardaient pas la cohérence du seuil. Les tests actuellement regardaient seulement le coût, le rappel et les faux rejets sur les données utilisées pour choisir le seuil. Sauf que dans l'intervalle de bottle par exemple, toutes les valeurs entre 28.4 et 38 nous donnaient un même cout, il ne prenait pas en compte l'existance d'une marge en cas de nouvelles pièces. 
+- La correction :
+  (Milieux entre scores uniques, `-inf` et `+inf` : à quoi sert chacun ?)
+  Ca nous permet d'avoir les cas où tout est refusé (`-inf`) ou tout est accepté (`+inf`). 
+  Nous avons pris plutot le milieu entre les différents candidats pour pouvoir avoir une marge dans le cas où il y aurait une nouvelle pièce.
+- Écrire le test avant :
+  (Pourquoi vérifier qu'il échoue avec l'ancien code ?)
+  Pour prouver que l'ancienne méthode ne marchait pas dans ce cas, donc également que le test est capable de trouver le bug, et pour vérifier que notre nouvelle méthode marche. 
+- Pièges numpy rencontrés :
+  (`np.append` avec 3 valeurs)
+  `np.append(arr, values, axis)` ne prend que 2 valeurs à coller : la 3e (`np.inf`) était prise comme axe, d'où l'erreur. On utilise `np.concatenate([[-np.inf], scores, [np.inf]])`.
+  `a[:-1] + a[1:] * 0.5` calcule d'abord la multiplication : il faut des parenthèses, `(a[:-1] + a[1:]) * 0.5`.
+
+## Proportion de défauts : validation contre ligne
+- Sur la validation :
+  (Combien de défauts pour 10 bonnes ? Un défaut pèse combien de bonnes, en nombre d'exemples ?)
+  Il y a 31~32 défauts pour 10 bonnes. On a donc 3 défauts pour 1 bonnes, soit les défauts sont trois plus nombreux.
+- Sur une ligne :
+  (Mêmes questions, avec 1 défaut pour 100 pièces.)
+  On aurait 1 défaut pour 99 bonnes, donc à l'inverse ici, les bonnes sont 99 fois plus nombreuses.
+- Conséquence sur le seuil :
+  (`cost_fn × FN + cost_fp × FP` compte les erreurs de la validation. Le seuil choisi est-il trop bas ou trop haut pour la ligne ? Pourquoi ?)
+  Le problème de ce deséquilibre est qu'il impacte la fonction de cout, car la part de bonnes pièces est beaucoup plus élevé et potentiellement il y aura plus de FP, ce qui rend cela moins comparable. Donc si il y a trop de pièces défectueuses, le seuil serait potentiellement trop bas, et à l'inverse, si il y a trop de bonnes pièces, le seuil serait trop haut, car le déséquilibre des classes n'est pas pris en compte.
+  Exemple: Le modèle rate 10 % des défauts et rejette 10 % des bonnes, avec cost_fn=10 et cost_fp=1 :
+  |                   | Validation (31 défauts, 10 bonnes) | Ligne (10 défauts, 990 bonnes) |
+  |-------------------|------------------------------------|--------------------------------|
+  | Coût des FN       | 3*10=30                            | 1*10=10                        |
+  | Coût des FP       | 1*1=1                              | 99*1=99                        |
+  | Erreur qui domine | FN très largement                  | FP assez largement             |
+  Sur la validation, les FN dominent donc le seuil descend ; sur la ligne, ce sont les FP. Le seuil choisi sur la validation est donc trop bas pour la ligne.
+- Comment corriger :
+  (Idée à trouver : remplacer les comptes par des taux ? Où intervient la proportion de défauts ?)
+  L'idée potentielle serait d'utiliser le taux de pièces défectueuses acceptés pour FN et le taux de bonnes pièces refusées pour FP. Ce qui balencerait un peu plus même si, le nombre de pièces défectueuses comparées aux bonnes (et inversement) aura quand meme un impact. Pareil que sur un autre problème, la précision, 10 pièces veut dire des paliers de 10%.
+  Cela était pour corriger le déséquilibre des données, ce qu'il manque c'est l'information de la ligne.
+  Pour 1000 pièces : 1000·p défauts, dont 1000·p·taux_FN ratés ; 1000·(1−p) bonnes, dont 1000·(1−p)·taux_FP rejetées.
+  Coût par pièce : `cost_fn × p × taux_FN + cost_fp × (1 − p) × taux_FP`.
+  Les taux retirent le déséquilibre du test, p remet celui de la ligne. p est une donnée de production, pas un réglage du modèle.
+  Avec p = 0.5, on retrouve les taux seuls : ça suppose 50 % de défauts.
+  Avec p = 0.01, cost_fn = 10 : poids 100 (FN) contre 990 (FP), donc le seuil monte.
+  Les deux erreurs pèsent autant quand cost_fn / cost_fp = (1 − p) / p, soit 99 pour p = 0.01.
+  Limite : avec 10 bonnes pièces, le taux de faux rejets avance par paliers de 10 %.
+
 ## Récupérer les scores
 - Le checkpoint :
   (Où anomalib l'écrit-il ? Comment le recharger ?)
-  ???
+  anomalib l'écrit dans `results/<Modèle>/MVTecAD/<catégorie>/vN/weights/lightning/model.ckpt`, mais rien ne relie un vN à sa graine. On réentraîne donc dans le script (~1 min sur bottle)
 - Ce que renvoie `engine.predict` :
   (Type, champs utiles : score, label, chemin. Comment je retrouve le type de défaut ?)
-  ???
+  Une liste d'`ImageBatch` (3 batches pour les 83 images de bottle). Champs utiles : `image_path` (liste de str), `gt_label` (tensor de booléens, converti avec `.int().tolist()`), `pred_score` (tensor de float). Le type de défaut est le dossier parent : `Path(path).parent.name`. `pred_label` est à ignorer : il vient du seuil fuité.
+- Normalisation d'anomalib
+  Par défaut, le score est centré sur le seuil fuité (0.5 = son seuil) et coupé à [0, 1], d'où les 1.0000. On la désactive avec `PostProcessor(enable_normalization=False)`. Scores bruts sur bottle : bonnes au max à 28.4, défauts au min à 38.0, donc parfaitement séparable.
 
 ## Questions ouvertes
 - Est ce que stratifier sur les positions des bonnes pièces quand nécessaire serait une bonne idée ? (tel que `screw`)
+- Décaler le seuil selon le coût en modélisant les distributions de scores.
+- Comment connaître p en pratique, et que faire s'il change ?
