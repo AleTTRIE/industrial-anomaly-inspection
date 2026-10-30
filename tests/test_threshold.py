@@ -40,3 +40,10 @@ def test_save_and_load_roundtrip(tmp_path):
     path = tmp_path / "threshold.json"
     save_threshold(point, path, cost_fn=10.0, cost_fp=1.0)
     assert load_threshold(path) == point.threshold
+
+
+def test_threshold_between_max_good_and_min_defective():
+    scores = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+    labels = np.array([0, 0, 1, 1, 1])
+    point = select_threshold(scores, labels)
+    assert point.threshold > max(scores[labels == 0]) and point.threshold < min(scores[labels == 1])

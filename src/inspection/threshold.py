@@ -40,8 +40,9 @@ def operating_points(
     if n_pos == 0 or n_neg == 0:
         raise ValueError("need both good and defective samples")
 
-    # Candidates: each observed score, plus one above the max (flag nothing).
-    candidates = np.append(np.unique(scores), np.inf)
+    # Candidates: midpoints between unique scores, plus -inf and +inf to flag everything or nothing.
+    a = np.concatenate([[-np.inf], np.unique(scores), [np.inf]])
+    candidates = (a[:-1] + a[1:]) * 0.5  # midpoints between unique scores
     points = []
     for t in candidates:
         flagged = scores >= t
