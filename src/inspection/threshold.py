@@ -2,7 +2,12 @@
 
 On a production line a missed defect (false negative) usually costs far more than
 rejecting a good part (false positive). Instead of the threshold maximising F1,
-we pick the one minimising the expected cost: cost_fn * FN + cost_fp * FP.
+we pick the one minimising the cost: cost_fn * FN + cost_fp * FP.
+
+With defect_rate=None the cost counts errors on the validation set, which implicitly
+assumes the line has the same share of defects as that set. Passing defect_rate (the
+expected share of defects on the line, strictly between 0 and 1) gives the expected
+cost per part instead: cost_fn * defect_rate * FN_rate + cost_fp * (1 - defect_rate) * FP_rate.
 """
 
 from __future__ import annotations
@@ -21,16 +26,22 @@ class OperatingPoint:
     false_reject_rate: float  # share of good parts rejected
     false_negatives: int
     false_positives: int
-    cost: float
+    cost: float  # error count cost if defect_rate is None, else expected cost per part
 
 
 def operating_points(
-    scores: np.ndarray, labels: np.ndarray, cost_fn: float = 10.0, cost_fp: float = 1.0
+    scores: np.ndarray,
+    labels: np.ndarray,
+    cost_fn: float = 10.0,
+    cost_fp: float = 1.0,
+    defect_rate: float | None = None,
 ) -> list[OperatingPoint]:
     """Evaluate every candidate threshold. A part is flagged KO when score >= threshold.
 
     labels: 1 = defective, 0 = good.
     """
+    if defect_rate is not None and (defect_rate <= 0.0 or defect_rate >= 1.0):
+        raise ValueError("defect_rate must be None or in (0, 1)")
     scores = np.asarray(scores, dtype=float)
     labels = np.asarray(labels, dtype=int)
     if scores.shape != labels.shape or scores.ndim != 1:
@@ -48,30 +59,44 @@ def operating_points(
         flagged = scores >= t
         fn = int(np.sum(~flagged & (labels == 1)))
         fp = int(np.sum(flagged & (labels == 0)))
+        fp_rate = fp / n_neg
+        fn_rate = fn / n_pos
+        fn_cost = cost_fn * fn
+        fp_cost = cost_fp * fp
+        if defect_rate is not None:
+            # Adjust the cost to account for the expected defect rate in production.
+            fn_cost = cost_fn * fn_rate * defect_rate
+            fp_cost = cost_fp * fp_rate * (1 - defect_rate)
         points.append(
             OperatingPoint(
                 threshold=float(t),
-                recall=(n_pos - fn) / n_pos,
-                false_reject_rate=fp / n_neg,
+                recall=1 - fn_rate,
+                false_reject_rate=fp_rate,
                 false_negatives=fn,
                 false_positives=fp,
-                cost=cost_fn * fn + cost_fp * fp,
+                cost=fn_cost + fp_cost,
             )
         )
     return points
 
 
 def select_threshold(
-    scores: np.ndarray, labels: np.ndarray, cost_fn: float = 10.0, cost_fp: float = 1.0
+    scores: np.ndarray,
+    labels: np.ndarray,
+    cost_fn: float = 10.0,
+    cost_fp: float = 1.0,
+    defect_rate: float | None = None,
 ) -> OperatingPoint:
     """Lowest-cost operating point; ties broken by the lowest false reject rate."""
-    points = operating_points(scores, labels, cost_fn, cost_fp)
+    points = operating_points(scores, labels, cost_fn, cost_fp, defect_rate)
     return min(points, key=lambda p: (p.cost, p.false_reject_rate))
 
 
-def save_threshold(point: OperatingPoint, path: Path, cost_fn: float, cost_fp: float) -> None:
+def save_threshold(
+    point: OperatingPoint, path: Path, cost_fn: float, cost_fp: float, defect_rate: float | None
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {**asdict(point), "cost_fn": cost_fn, "cost_fp": cost_fp}
+    payload = {**asdict(point), "cost_fn": cost_fn, "cost_fp": cost_fp, "defect_rate": defect_rate}
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
