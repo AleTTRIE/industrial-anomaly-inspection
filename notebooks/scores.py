@@ -1,6 +1,8 @@
 import collections
 from pathlib import Path
 
+from sklearn.model_selection import train_test_split
+
 from inspection.config import DATA_ROOT
 
 
@@ -62,15 +64,22 @@ def score(results):
     return stats
 
 
-def main():
-    model = "patchcore"  # or "padim"
-    category = "bottle"  # or another MVTec AD category
-    seed = 42
-    results = collect_scores(model, category, seed)
-    print(
-        f"Collected {len(results)} scores for",
-        f"model '{model}' on category '{category}' with seed {seed}.",
+def split_results(results, test_size=0.5, seed=42):
+    """Split results into validation and test sets, stratified by defect type."""
+    defect_types = [r[1] for r in results]
+
+    validation, test = train_test_split(
+        results,
+        test_size=test_size,
+        random_state=seed,
+        stratify=defect_types,
     )
+
+    return validation, test
+
+
+def present_results(results):
+    print(f"Total results: {len(results)}")
     print(collections.Counter([r[1] for r in results]))  # Count of ground truth labels
     print("Score statistics:")
     for defect_type, stat in score(results).items():
@@ -80,6 +89,31 @@ def main():
             f" max={stat['max']:.3f},",
             f" mean={stat['mean']:.3f}",
         )
+    print()
+
+
+def main():
+    model = "patchcore"  # or "padim"
+    category = "screw"  # or another MVTec AD category
+    seed = 42
+    results = collect_scores(model, category, seed)
+    print(
+        f"Collected {len(results)} scores for",
+        f"model '{model}' on category '{category}' with seed {seed}.",
+    )
+
+    present_results(results)
+
+    split_seed = 42
+    validation, test = split_results(results, test_size=0.5, seed=split_seed)
+    print("\nValidation set:")
+    present_results(validation)
+    print("\nTest set:")
+    present_results(test)
+
+    # The two sets should be disjoint and cover all results
+    assert set(validation) & set(test) == set()
+    assert set(validation) | set(test) == set(results)
 
 
 if __name__ == "__main__":
