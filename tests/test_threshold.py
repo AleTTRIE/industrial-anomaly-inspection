@@ -3,7 +3,13 @@ import json
 import numpy as np
 import pytest
 
-from inspection.threshold import load_threshold, operating_points, save_threshold, select_threshold
+from inspection.threshold import (
+    evaluate_threshold,
+    load_threshold,
+    operating_points,
+    save_threshold,
+    select_threshold,
+)
 
 
 def test_perfect_separation_catches_all_defects_without_rejects():
@@ -82,3 +88,33 @@ def test_rejects_invalid_defect_rate():
         select_threshold(scores, labels, defect_rate=0.0)
     with pytest.raises(ValueError):
         select_threshold(scores, labels, defect_rate=1.0)
+
+
+def test_evaluate_threshold_exact_counts():
+    scores = np.array([0.1, 0.3, 0.6, 0.8, 0.2, 0.7, 0.9])
+    labels = np.array([0, 0, 0, 0, 1, 1, 1])
+    cost_fn = 10.0
+    cost_fp = 1.0
+    point = evaluate_threshold(
+        scores, labels, threshold=0.5, cost_fn=cost_fn, cost_fp=cost_fp, defect_rate=None
+    )
+    assert point.false_negatives == 1
+    assert point.false_positives == 2
+    assert point.recall == pytest.approx((3 - 1) / 3)
+    assert point.false_reject_rate == 2.0 / 4.0
+    assert point.cost == cost_fn * 1.0 + cost_fp * 2.0
+
+
+def test_score_equal_to_threshold_is_flagged():
+    scores = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.9])
+    labels = np.array([0, 0, 0, 0, 1, 1])
+    point = evaluate_threshold(
+        scores, labels, threshold=0.4, cost_fn=10.0, cost_fp=1.0, defect_rate=0.1
+    )
+    assert point.false_reject_rate == 1.0 / 4.0
+
+
+def test_evaluate_threshold_accepts_lists():
+    from_lists = evaluate_threshold([0.1, 0.9], [0, 1], threshold=0.5)
+    from_arrays = evaluate_threshold(np.array([0.1, 0.9]), np.array([0, 1]), threshold=0.5)
+    assert from_lists == from_arrays

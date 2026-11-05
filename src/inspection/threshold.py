@@ -29,6 +29,56 @@ class OperatingPoint:
     cost: float  # error count cost if defect_rate is None, else expected cost per part
 
 
+def _check_inputs(
+    scores: np.ndarray, labels: np.ndarray, defect_rate: float | None
+) -> tuple[np.ndarray, np.ndarray, int, int]:
+    """Convert to arrays, validate, return (scores, labels, n_pos, n_neg)."""
+    if defect_rate is not None and (defect_rate <= 0.0 or defect_rate >= 1.0):
+        raise ValueError("defect_rate must be None or in (0, 1)")
+    scores = np.asarray(scores, dtype=float)
+    labels = np.asarray(labels, dtype=int)
+    if scores.shape != labels.shape or scores.ndim != 1:
+        raise ValueError("scores and labels must be 1-D arrays of the same length")
+    n_pos = int(labels.sum())
+    n_neg = len(labels) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        raise ValueError("need both good and defective samples")
+    return scores, labels, n_pos, n_neg
+
+
+def evaluate_threshold(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    threshold: float,
+    cost_fn: float = 10.0,
+    cost_fp: float = 1.0,
+    defect_rate: float | None = None,
+) -> OperatingPoint:
+    """Evaluate a single threshold. A part is flagged KO when score >= threshold.
+
+    labels: 1 = defective, 0 = good."""
+    scores, labels, n_pos, n_neg = _check_inputs(scores, labels, defect_rate)
+    flagged = scores >= threshold
+    fn = int(np.sum(~flagged & (labels == 1)))
+    fp = int(np.sum(flagged & (labels == 0)))
+    fp_rate = fp / n_neg
+    fn_rate = fn / n_pos
+    fn_cost = cost_fn * fn
+    fp_cost = cost_fp * fp
+    if defect_rate is not None:
+        # Adjust the cost to account for the expected defect rate in production.
+        fn_cost = cost_fn * fn_rate * defect_rate
+        fp_cost = cost_fp * fp_rate * (1 - defect_rate)
+    return OperatingPoint(
+        threshold=float(threshold),
+        recall=1 - fn_rate,
+        false_reject_rate=fp_rate,
+        false_negatives=fn,
+        false_positives=fp,
+        cost=fn_cost + fp_cost,
+    )
+
+
 def operating_points(
     scores: np.ndarray,
     labels: np.ndarray,
@@ -40,41 +90,20 @@ def operating_points(
 
     labels: 1 = defective, 0 = good.
     """
-    if defect_rate is not None and (defect_rate <= 0.0 or defect_rate >= 1.0):
-        raise ValueError("defect_rate must be None or in (0, 1)")
-    scores = np.asarray(scores, dtype=float)
-    labels = np.asarray(labels, dtype=int)
-    if scores.shape != labels.shape or scores.ndim != 1:
-        raise ValueError("scores and labels must be 1-D arrays of the same length")
-    n_pos = int(labels.sum())
-    n_neg = len(labels) - n_pos
-    if n_pos == 0 or n_neg == 0:
-        raise ValueError("need both good and defective samples")
-
+    scores, labels, _, _ = _check_inputs(scores, labels, defect_rate)
     # Candidates: midpoints between unique scores, plus -inf and +inf to flag everything or nothing.
     sorted_scores = np.concatenate([[-np.inf], np.unique(scores), [np.inf]])
     candidates = (sorted_scores[:-1] + sorted_scores[1:]) * 0.5
     points = []
     for t in candidates:
-        flagged = scores >= t
-        fn = int(np.sum(~flagged & (labels == 1)))
-        fp = int(np.sum(flagged & (labels == 0)))
-        fp_rate = fp / n_neg
-        fn_rate = fn / n_pos
-        fn_cost = cost_fn * fn
-        fp_cost = cost_fp * fp
-        if defect_rate is not None:
-            # Adjust the cost to account for the expected defect rate in production.
-            fn_cost = cost_fn * fn_rate * defect_rate
-            fp_cost = cost_fp * fp_rate * (1 - defect_rate)
         points.append(
-            OperatingPoint(
-                threshold=float(t),
-                recall=1 - fn_rate,
-                false_reject_rate=fp_rate,
-                false_negatives=fn,
-                false_positives=fp,
-                cost=fn_cost + fp_cost,
+            evaluate_threshold(
+                scores,
+                labels,
+                threshold=t,
+                cost_fn=cost_fn,
+                cost_fp=cost_fp,
+                defect_rate=defect_rate,
             )
         )
     return points
