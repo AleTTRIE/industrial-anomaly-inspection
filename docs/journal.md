@@ -22,6 +22,10 @@ La fin de ligne est un caractère invisible : LF (\n) sous Linux et macOS, CRLF 
 Ton code tourne au final sous Linux : dans l'image Docker, dans la CI et sur Cloud Run. Un script shell en CRLF y plante, avec une erreur du genre /bin/sh^M: bad interpreter, où le ^M est le \r en trop. Tu ne le vois pas dans l'éditeur, donc tu peux chercher longtemps.
 La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans le repo, donc elle s'applique à tout le monde, au lieu de dépendre de la configuration Git de chaque machine.
 
+
+
+
+
 # Séance 2 : 20 au 22 octobre 2026, premier entraînement
 
 ## Mise en route
@@ -150,6 +154,10 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
 - Que donne l'AUPRO, la métrique pensée pour les petits défauts, plutôt que l'AUROC pixel ?
 - Est ce que l'impacte du premier patch varie en fonction des problèmes tel que bottle vs screw ? Et en fonction par exemple du ratio pour le coreset ?
 
+
+
+
+
 # Séance 3 : 23 au 27 octobre 2026, train.py et les 8 runs
 
 ## Ligne de commande
@@ -237,6 +245,8 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
 ## Questions ouvertes
 - Comparer PatchCore à PaDiM avec `backbone="wide_resnet50_2"`.
 - 5 graines suffisent-elles ?
+
+
 
 
 
@@ -359,3 +369,99 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
 - Est ce que stratifier sur les positions des bonnes pièces quand nécessaire serait une bonne idée ? (tel que `screw`)
 - Décaler le seuil selon le coût en modélisant les distributions de scores.
 - Comment connaître p en pratique, et que faire s'il change ?
+
+
+
+
+
+# Séance 5 : 4 au 6 novembre 2026, un seuil mesuré honnêtement
+
+## `defect_rate` dans threshold.py
+- Valeur par défaut :
+  (`None`, 0.5 ou 0.01 ? Que suppose `None` ?)
+  `None` par défaut, car p est là comme paramètre pour ajouter du réalisme : c'est une option pour confronter le laboratoire à la réalité terrain. Avec `None`, le coût reste en comptes, ce qui suppose que la ligne a la même proportion de défauts que la validation (environ 3 défauts pour 1 bonne). `None` n'est donc pas neutre.
+- p = 0 ou p = 1 :
+  (Alerte ou erreur ? Que se passe-t-il à p = 0 ?)
+  Mon premier réflexe était d'autoriser avec une alerte. Mais à p = 0, le coût se réduit à `cost_fp × taux_FP`, donc le seuil optimal est `+inf` : on ne rejette rien. En batch, personne ne lit l'alerte, `+inf` est écrit dans `threshold.json` et la production accepte tout. On lève donc un `ValueError` si p n'est pas strictement entre 0 et 1.
+- Ce que garde `threshold.json` :
+  (Pourquoi stocker `defect_rate`, même à `None` ? Pourquoi sans valeur par défaut dans `save_threshold` ?)
+  Mieux vaut plus de détails que pas assez : on garde tout ce qui a servi à choisir le seuil (`cost_fn`, `cost_fp`, `defect_rate`). `null` veut dire « coût en comptes ». Le paramètre est obligatoire pour qu'un oubli donne une erreur, au lieu d'un fichier qui mentirait.
+- Le calcul à la main :
+  (Données du test, `cost_fn=10`. Quel seuil gagne à p = 0.5 ? À p = 0.01 ?)
+  | Seuil | taux_FN | taux_FP | coût p = 0.5 | coût p = 0.01 |
+  |-------|---------|---------|--------------|---------------|
+  | 0.225 | 0       | 0.5     | 0.25         | 0.495         |
+  | 0.35  | 0.5     | 0.25    | 2.625        | 0.2975        |
+  | 0.65  | 0.5     | 0       | 2.5          | 0.05          |
+  À p = 0.5, 0.225 gagne avec un rappel de 1. À p = 0.01, 0.65 gagne avec un rappel de 0.5 : rater la moitié des défauts coûte moins cher que rejeter 25 % des bonnes pièces sur une ligne à 99 % de bonnes.
+- Un test vert qui ne prouve rien :
+  (Pourquoi `default.cost != with_defect_rate.cost` ne suffisait pas ?)
+  Le test passait avec et sans le bug. Coût de `None` pour le seuil choisi (FN = 0, FP = 2 sur 4) : 2.0 avec le code correct (comptes), 0.5 avec le code buggé (taux). Avec `defect_rate=0.5`, c'est 0.25. Les deux versions sont différentes de 0.25, donc `!=` ne distinguait rien. On vérifie maintenant la valeur exacte, `default.cost == 2.0` : avec le bug, le test échoue. Un test doit échouer si le code est faux, d'où l'intérêt de le voir échouer au moins une fois.
+- Pièges Python :
+  (`== None`, `payload.get`, `==` sur des flottants)
+  Le standard python pour vérifier l'égalité avec `None` est `... is None` et pas `... == None` (ce que j'avais mis à la base).
+  Quand on voulait récupérer une valeur, si elle était manquante, on voulait une erreur, ce qui n'est pas le cas avec `payload.get` qui renvoie `None` quand la valeur est absente.
+  Un float est stocké en binaire sur 53 bits. 1/3 a une écriture binaire infinie, donc il est arrondi. Selon le calcul, l'arrondi tombe différemment : `2/3` donne 0.6666666666666666 et `1 - 1/3` donne 0.6666666666666667. `==` les dit différents. `pytest.approx` compare avec une tolérance. Pour des valeurs exactes en binaire (1/4, 1/2) ou des entiers, `==` suffit.
+
+## Le découpage validation / test
+- Le premier bug :
+  (Qu'est-ce que je découpais ? Pourquoi chaque moitié contenait les 160 images ?)
+  Je voulais séparer le dataset test initial en deux autres datasets, un de validation et un de test. Pour cela, je prenais la liste des défauts pour les séparer en deux sauf que cela ne permet pas de les séparer car chaque sub list contenait ces mêmes défauts, donc les deux datasets prenaient tous les éléments du dataset initial. Les séparer seulement par les types de défauts étaient donc une erreur bête.
+- Une graine séparée pour le découpage :
+  (Pourquoi pas la même que celle du modèle ?)
+  Avec deux graines séparées, je peux garder le modèle fixe et ne faire varier que le découpage, pour mesurer à quel point le seuil dépend des images tombées en validation.
+- Les groupes impairs :
+  (41, 25, 23 images : comment se répartissent-elles ?)
+  Une moitié prend une image de plus : 41 good → 20/21, 25 scratch_neck → 13/12, 23 → 11/12. Un écart d'une image sur 12 (environ 4 %), sans conséquence.
+
+## `evaluate_threshold`
+- Pourquoi dans threshold.py :
+  (Que risque-t-on avec deux copies de la règle `>=` ?)
+  Si l'on fait deux fois la même chose dans deux fichiers différents et que l'on veut modifier la méthode, on peut le corriger dans un fichier mais oublier de le faire dans l'autre, ce qui peut causer différents problèmes tel que de faux tests ou mauvais résultats.
+- Les tests :
+  (Pourquoi « FN + TP = nombre de défauts » est un test faible ? Pourquoi FN et FP doivent être différents ? Le cas limite ?)
+  « FN + TP = nombre de défauts » est vrai pour n'importe quel seuil, et même avec une règle fausse (`>` au lieu de `>=`, ou FN et FP inversés) : il ne peut donc pas détecter ces bugs. On vérifie plutôt des comptes exacts calculés à la main. FN et FP doivent avoir des valeurs différentes (1 et 2) : sinon, une inversion donnerait le même résultat et passerait inaperçue. Le cas limite (un score exactement égal au seuil doit être KO) est le seul test qui distingue `>=` de `>`.
+
+## Premier résultat honnête (split_seed 42)
+- Les chiffres :
+  | | Seuil | Rappel val → test | Faux rejets val → test | Coût val → test |
+  |---|---|---|---|---|
+  | `None` | 30.57 | 1.000 → 0.932 (FN 0 → 4) | 25 % → 14 % (FP 5 → 3) | 5 → 43 |
+  | `0.01` | 32.90 | 0.850 → 0.797 (FN 9 → 12) | 0 % → 9.5 % (FP 0 → 2) | 0.015 → 0.115 |
+- Mes prédictions et ce qui s'est passé :
+  (La pièce à 35.78 ? Faux rejets plus élevés sur le test ?)
+  La bonne pièce à 35.78 risquait de devenir un faux rejet : confirmé avec 0.01, le seuil est collé au good max de la validation (32.83). Je pensais que les faux rejets seraient plus élevés sur le test, car good max y est plus haut et un faux rejet coûte cher avec peu de valeurs. Vrai avec 0.01 (0 → 2), faux avec `None` (5 → 3) : le seuil 30.57 est bas, en plein dans la masse des bonnes pièces (moyenne ~29). Le nombre de bonnes rejetées dépend alors du hasard du découpage, et 2 pièces d'écart suffisent à passer de 25 % à 14 %.
+- Ce que ça montre :
+  (Combien de fois plus cher sur le test ?)
+  Nous avons pu donc confirmer que le coût mesuré sur la validation était beaucoup trop optimiste, car nous pouvons le voir sur le tableau ci dessus, le coût est au moins 7 fois plus élevé pour le dataset de test que pour le dataset de validation quand on choisit le seuil sur le dataset de validation.
+
+## 20 découpages
+- Les chiffres (moyenne, min–max sur le test) :
+  | cost_fn | p | Seuil | Rappel | Faux rejets |
+  |---|---|---|---|---|
+  | 10 | None | 29.73 (29.46–30.38) | 0.987 (0.949–1.000) | 27.5 % (19.0–45.0) |
+  | 10 | 0.01 | 34.50 (31.98–35.97) | 0.737 (0.550–0.898) | 6.6 % (0.0–25.0) |
+  | 100 | None | 29.73 (29.46–30.38) | 0.987 (0.949–1.000) | 27.5 % (19.0–45.0) |
+  | 100 | 0.01 | 31.96 (29.94–33.14) | 0.875 (0.797–0.983) | 14.1 % (0.0–28.6) |
+- Mes prédictions :
+  (Quel seuil varie le plus ? Que fait `cost_fn=100` ?)
+  Le seuil varie plus avec 0.01, car il est collé au good max : confirmé (écart-type 1.50 contre 0.26). La vraie raison : c'est l'extrême de 20 bonnes pièces contre celui de 60 défauts. Avec `cost_fn=100`, le seuil baisse et les faux rejets montent, car on accepte moins de pièces défectueuses et on compense par des faux rejets : confirmé (34.5 → 32.0, 6.6 % → 14.1 %).
+- Le découpage 42 :
+  (Était-il représentatif ?)
+  Le test avec une seule seed (42) n'était pas du tout représentatif, car nous avions eu 30.567 comme seuil avec `None`, ce qui est plus élevé que le maximum trouvé sur les 20 seeds utilisées juste après. Et avec `0.01`, il nous donnait 32.9 alors que la moyenne des 20 seeds est 34.5. Si nous en étions resté là, nous aurions fait des conclusions hâtives et basées sur un tirage atypique
+- `None` ne bouge pas avec `cost_fn` :
+  (Pourquoi le même seuil avec 10 et 100 ?)
+  Avec `cost_fn=10`, le rappel de validation vaut déjà 1.0 : FN = 0. Le seuil est juste sous le défaut le plus bas de la validation. Augmenter `cost_fn` multiplie un FN qui vaut 0, donc le coût de ce seuil ne change pas. Et le descendre encore ne rattraperait aucun défaut, il ajouterait seulement des faux rejets. Le seuil reste donc le même pour tout cost_fn assez grand. 
+
+## Petits effectifs, en vrai
+- Ce qui est fiable :
+  (Paliers du rappel et des faux rejets)
+  On a plus de précision sur les pièces défectueuses, car les paliers sont plus petits : 1 défaut = 1.7 %, 1 bonne pièce = 5 %. Il est donc assez dure de tirer des conclusions sur les performances du modèle, notamment surtout en ce qui concerne les infos sur les bonnes pièces, en prenant en compte les cas atypiques et le palier élevé, les résultats bougent énormement. Pareil pour les infos sur les défauts même si le palier est plus faible. 
+- La règle de trois :
+  (Que veut dire 0 faux rejet sur 20 ?)
+  Avec 0 erreur sur n pièces, on peut seulement dire que le vrai taux est inférieur à 3/n, avec 95 % de confiance. 0 faux rejet sur 20 veut donc dire « moins de 15 % », pas « 0 % ». D'où vient le 3 : si le vrai taux est p, la probabilité de ne voir aucune erreur sur n pièces est (1 − p)^n ≈ e^(−pn). Elle tombe à 5 % quand pn ≈ 3, car ln(0.05) ≈ −3.
+
+## Questions ouvertes
+- Peut-on déployer PatchCore sur screw avec cost_fn=100 et p=0.01 (12.5 % de défauts ratés, 14 % de faux rejets) ?
+- Mettre `cost_fn`, `cost_fp` et `defect_rate` dans `OperatingPoint`, et les retirer des paramètres de `save_threshold`.
+- Sauvegarder les scores pour ne plus réentraîner à chaque lancement.
