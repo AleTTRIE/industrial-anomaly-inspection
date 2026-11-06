@@ -1,9 +1,11 @@
 import collections
 from pathlib import Path
 
+import numpy as np
 from sklearn.model_selection import train_test_split
 
 from inspection.config import DATA_ROOT
+from inspection.threshold import evaluate_threshold, select_threshold
 
 
 def collect_scores(model_name, category, seed):
@@ -92,6 +94,13 @@ def present_results(results):
     print()
 
 
+def scores_and_labels(results):
+    """Return scores and labels as numpy arrays."""
+    scores = np.array([r[3] for r in results])
+    labels = np.array([r[2] for r in results])
+    return scores, labels
+
+
 def main():
     model = "patchcore"  # or "padim"
     category = "screw"  # or another MVTec AD category
@@ -114,6 +123,41 @@ def main():
     # The two sets should be disjoint and cover all results
     assert set(validation) & set(test) == set()
     assert set(validation) | set(test) == set(results)
+
+    val_scores, val_labels = scores_and_labels(validation)
+    test_scores, test_labels = scores_and_labels(test)
+
+    val_n_pos = int(val_labels.sum())
+    val_n_neg = len(val_labels) - val_n_pos
+    test_n_pos = int(test_labels.sum())
+    test_n_neg = len(test_labels) - test_n_pos
+
+    for defect_rate in [None, 0.01]:
+        chosen = select_threshold(
+            val_scores, val_labels, cost_fn=10.0, cost_fp=1.0, defect_rate=defect_rate
+        )
+        measured = evaluate_threshold(
+            test_scores,
+            test_labels,
+            threshold=chosen.threshold,
+            cost_fn=10.0,
+            cost_fp=1.0,
+            defect_rate=defect_rate,
+        )
+        print(
+            f"Defect rate: {defect_rate}, threshold: {chosen.threshold:.3f}:\n",
+            f"   validation: recall={chosen.recall:.3f} ",
+            f"(FN {chosen.false_negatives}/{val_n_pos}),",
+            f" false_reject_rate={chosen.false_reject_rate:.3f} ",
+            f"(FP {chosen.false_positives}/{val_n_neg}),",
+            f" cost={chosen.cost:.3f}\n",
+            f"   test:       recall={measured.recall:.3f} ",
+            f"(FN {measured.false_negatives}/{test_n_pos}),",
+            f" false_reject_rate={measured.false_reject_rate:.3f} ",
+            f"(FP {measured.false_positives}/{test_n_neg}),",
+            f" cost={measured.cost:.3f}\n",
+            sep="",
+        )
 
 
 if __name__ == "__main__":
