@@ -77,6 +77,10 @@ def split_results(results, test_size=0.5, seed=42):
         stratify=defect_types,
     )
 
+    # The two sets should be disjoint and cover all results
+    assert set(validation) & set(test) == set()
+    assert set(validation) | set(test) == set(results)
+
     return validation, test
 
 
@@ -101,6 +105,40 @@ def scores_and_labels(results):
     return scores, labels
 
 
+def evaluate_split(results, split_seed, cost_fn, cost_fp, defect_rate):
+    validation, test = split_results(results, test_size=0.5, seed=split_seed)
+    val_scores, val_labels = scores_and_labels(validation)
+    test_scores, test_labels = scores_and_labels(test)
+
+    chosen = select_threshold(
+        val_scores, val_labels, cost_fn=cost_fn, cost_fp=cost_fp, defect_rate=defect_rate
+    )
+    measured = evaluate_threshold(
+        test_scores,
+        test_labels,
+        threshold=chosen.threshold,
+        cost_fn=cost_fn,
+        cost_fp=cost_fp,
+        defect_rate=defect_rate,
+    )
+    return chosen, measured
+
+
+def summarize(measured_points):
+    """Summarize measured points by calculating min, max, mean and std for each metric."""
+    metrics = ["threshold", "recall", "false_reject_rate", "cost"]
+    summary = {}
+    for metric in metrics:
+        values = [getattr(point, metric) for point in measured_points]
+        summary[metric] = {
+            "min": np.min(values),
+            "max": np.max(values),
+            "mean": np.mean(values),
+            "std": np.std(values),
+        }
+    return summary
+
+
 def main():
     model = "patchcore"  # or "padim"
     category = "screw"  # or another MVTec AD category
@@ -110,54 +148,21 @@ def main():
         f"Collected {len(results)} scores for",
         f"model '{model}' on category '{category}' with seed {seed}.",
     )
-
     present_results(results)
 
-    split_seed = 42
-    validation, test = split_results(results, test_size=0.5, seed=split_seed)
-    print("\nValidation set:")
-    present_results(validation)
-    print("\nTest set:")
-    present_results(test)
-
-    # The two sets should be disjoint and cover all results
-    assert set(validation) & set(test) == set()
-    assert set(validation) | set(test) == set(results)
-
-    val_scores, val_labels = scores_and_labels(validation)
-    test_scores, test_labels = scores_and_labels(test)
-
-    val_n_pos = int(val_labels.sum())
-    val_n_neg = len(val_labels) - val_n_pos
-    test_n_pos = int(test_labels.sum())
-    test_n_neg = len(test_labels) - test_n_pos
-
-    for defect_rate in [None, 0.01]:
-        chosen = select_threshold(
-            val_scores, val_labels, cost_fn=10.0, cost_fp=1.0, defect_rate=defect_rate
-        )
-        measured = evaluate_threshold(
-            test_scores,
-            test_labels,
-            threshold=chosen.threshold,
-            cost_fn=10.0,
-            cost_fp=1.0,
-            defect_rate=defect_rate,
-        )
-        print(
-            f"Defect rate: {defect_rate}, threshold: {chosen.threshold:.3f}:\n",
-            f"   validation: recall={chosen.recall:.3f} ",
-            f"(FN {chosen.false_negatives}/{val_n_pos}),",
-            f" false_reject_rate={chosen.false_reject_rate:.3f} ",
-            f"(FP {chosen.false_positives}/{val_n_neg}),",
-            f" cost={chosen.cost:.3f}\n",
-            f"   test:       recall={measured.recall:.3f} ",
-            f"(FN {measured.false_negatives}/{test_n_pos}),",
-            f" false_reject_rate={measured.false_reject_rate:.3f} ",
-            f"(FP {measured.false_positives}/{test_n_neg}),",
-            f" cost={measured.cost:.3f}\n",
-            sep="",
-        )
+    for cost_fn, cost_fp in [(10.0, 1.0), (100.0, 1.0)]:
+        for defect_rate in [None, 0.01]:
+            measured = [
+                evaluate_split(results, split_seed, cost_fn, cost_fp, defect_rate)[1]
+                for split_seed in range(20)
+            ]
+            print(f"cost_fn={cost_fn}, cost_fp={cost_fp}, defect_rate={defect_rate}:")
+            summary = summarize(measured)
+            for metric, stat in summary.items():
+                print(
+                    f">>  {metric}: mean={stat['mean']:.3f}, std={stat['std']:.3f}",
+                    f", min={stat['min']:.3f}, max={stat['max']:.3f}",
+                )
 
 
 if __name__ == "__main__":
