@@ -1,10 +1,11 @@
 import collections
+import json
 from pathlib import Path
 
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-from inspection.config import DATA_ROOT
+from inspection.config import DATA_ROOT, RESULTS_DIR
 from inspection.threshold import evaluate_threshold, select_threshold
 
 
@@ -45,6 +46,54 @@ def collect_scores(model_name, category, seed):
         ):
             type_defaut = Path(path).parent.name
             results.append((path, type_defaut, gt_label, score))
+    return results
+
+
+def scores_path(model_name, category, seed):
+    return RESULTS_DIR / "scores" / f"{model_name}_{category}_{seed}_raw.json"
+
+
+def save_scores(results, path, model_name, category, seed):
+    import anomalib
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dict_to_save = {
+        "model": model_name,
+        "category": category,
+        "seed": seed,
+        "normalize": False,
+        "anomalib_version": anomalib.__version__,
+        "scores": [],
+    }
+    for image_path, defect_type, gt_label, image_score in results:
+        dict_to_save["scores"].append(
+            {
+                "path": image_path,
+                "defect_type": defect_type,
+                "gt_label": gt_label,
+                "score": image_score,
+            }
+        )
+    path.write_text(json.dumps(dict_to_save, indent=2), encoding="utf-8")
+
+
+def load_scores(path):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    results = []
+    for item in data["scores"]:
+        results.append((item["path"], item["defect_type"], item["gt_label"], item["score"]))
+    return results
+
+
+def load_or_collect_scores(model_name, category, seed):
+    path = scores_path(model_name, category, seed)
+    if path.exists():
+        results = load_scores(path)
+        print(f"Loaded {len(results)} scores for {model_name} on {category}")
+    else:
+        results = collect_scores(model_name, category, seed)
+        save_scores(results, path, model_name, category, seed)
+        print(f"Collected and saved {len(results)} scores for {model_name} on {category}")
     return results
 
 
@@ -143,9 +192,9 @@ def main():
     model = "patchcore"  # or "padim"
     category = "screw"  # or another MVTec AD category
     seed = 42
-    results = collect_scores(model, category, seed)
+    results = load_or_collect_scores(model, category, seed)
     print(
-        f"Collected {len(results)} scores for",
+        f"Using {len(results)} scores for",
         f"model '{model}' on category '{category}' with seed {seed}.",
     )
     present_results(results)
