@@ -45,16 +45,34 @@ def test_requires_both_classes():
 
 
 def test_save_and_load_roundtrip(tmp_path):
-    point = select_threshold(np.array([0.1, 0.9]), np.array([0, 1]))
+    point = select_threshold(
+        np.array([0.1, 0.9]), np.array([0, 1]), cost_fn=10.0, cost_fp=1.0, defect_rate=0.01
+    )
     path = tmp_path / "threshold.json"
-    save_threshold(point, path, cost_fn=10.0, cost_fp=1.0, defect_rate=0.01)
+    save_threshold(point, path)
     assert load_threshold(path) == point.threshold
     payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["cost_fn"] == 10.0
+    assert payload["cost_fp"] == 1.0
     assert payload["defect_rate"] == 0.01
 
-    save_threshold(point, path, cost_fn=10.0, cost_fp=1.0, defect_rate=None)
+    point = select_threshold(
+        np.array([0.1, 0.9]), np.array([0, 1]), cost_fn=10.0, cost_fp=1.0, defect_rate=None
+    )
+    save_threshold(point, path)
     payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["cost_fn"] == 10.0
+    assert payload["cost_fp"] == 1.0
     assert payload["defect_rate"] is None
+
+
+def test_point_carries_its_cost_parameters():
+    scores = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+    labels = np.array([0, 0, 1, 1, 1])
+    point = select_threshold(scores, labels, cost_fn=100.0, cost_fp=1.0, defect_rate=0.01)
+    assert point.cost_fn == 100.0
+    assert point.cost_fp == 1.0
+    assert point.defect_rate == 0.01
 
 
 def test_threshold_between_max_good_and_min_defective():

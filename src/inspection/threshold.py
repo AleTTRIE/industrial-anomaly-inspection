@@ -26,7 +26,10 @@ class OperatingPoint:
     false_reject_rate: float  # share of good parts rejected
     false_negatives: int
     false_positives: int
-    cost: float  # error count cost if defect_rate is None, else expected cost per part
+    cost_fn: float  # cost of false negatives
+    cost_fp: float  # cost of false positives
+    defect_rate: float | None  # expected share of defects on the line, or None
+    cost: float  # unit depends on defect_rate (see above)
 
 
 def _check_inputs(
@@ -75,6 +78,9 @@ def evaluate_threshold(
         false_reject_rate=fp_rate,
         false_negatives=fn,
         false_positives=fp,
+        cost_fn=cost_fn,
+        cost_fp=cost_fp,
+        defect_rate=defect_rate,
         cost=fn_cost + fp_cost,
     )
 
@@ -121,12 +127,9 @@ def select_threshold(
     return min(points, key=lambda p: (p.cost, p.false_reject_rate))
 
 
-def save_threshold(
-    point: OperatingPoint, path: Path, cost_fn: float, cost_fp: float, defect_rate: float | None
-) -> None:
+def save_threshold(point: OperatingPoint, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {**asdict(point), "cost_fn": cost_fn, "cost_fp": cost_fp, "defect_rate": defect_rate}
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(asdict(point), indent=2), encoding="utf-8")
 
 
 def load_threshold(path: Path) -> float:
