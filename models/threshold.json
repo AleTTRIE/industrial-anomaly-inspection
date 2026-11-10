@@ -1,0 +1,11 @@
+{
+  "threshold": 32.20384407043457,
+  "recall": 0.8571428571428572,
+  "false_reject_rate": 0.07317073170731707,
+  "false_negatives": 17,
+  "false_positives": 3,
+  "cost_fn": 100.0,
+  "cost_fp": 1.0,
+  "defect_rate": 0.01,
+  "cost": 0.21529616724738676
+}
