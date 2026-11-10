@@ -212,7 +212,7 @@ def main():
 
     rate = "none" if args.defect_rate is None else f"{args.defect_rate:g}"
     name = f"{args.model}_{args.category}_s{args.seed}"
-    name +=f"_fn{args.cost_fn:g}_fp{args.cost_fp:g}_p{rate}.json"
+    name += f"_fn{args.cost_fn:g}_fp{args.cost_fp:g}_p{rate}.json"
     report_path = REPORTS_DIR / name
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
