@@ -8,7 +8,7 @@
 - [x] Results table in the README
 
 ## Week 2: industrial angle
-- [ ] Hold-out split for threshold selection (no leak from the test set)
+- [x] Hold-out split for threshold selection (no leak from the test set)
 - [ ] Recall vs false-reject-rate curve, cost-based threshold, sensitivity to cost_fn/cost_fp
 - [ ] Latency benchmark: PyTorch vs ONNX Runtime vs OpenVINO (median, p95, CPU model)
 - [ ] Heatmap figures: good detections and failure cases
