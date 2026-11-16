@@ -465,3 +465,95 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
 - Peut-on déployer PatchCore sur screw avec cost_fn=100 et p=0.01 (12.5 % de défauts ratés, 14 % de faux rejets) ?
 - Mettre `cost_fn`, `cost_fp` et `defect_rate` dans `OperatingPoint`, et les retirer des paramètres de `save_threshold`.
 - Sauvegarder les scores pour ne plus réentraîner à chaque lancement.
+
+
+
+
+
+# Séance 6 : 10 au 12 novembre 2026, evaluate.py
+
+## Le cache des scores
+- Pourquoi un cache :
+  (Combien coûte un recalcul des scores ? Qu'est-ce qui change d'un appel à l'autre, et qu'est-ce qui ne change pas ?)
+  En fonction des modèles et données utilisées, lancer le calcul du score peut etre plusieurs minutes. En gardant les mêmes paramètres et en utilisant une meme seed, on peut relancer exactement le même calcul et avoir les mêmes scores/résultats, donc pour éviter de le recalculer, pourquoi ne pas sauvegarder le score, c'est le cache.  
+- Où ranger les fichiers :
+  (Dans results/ directement, ou dans un sous-dossier ? Dans git ou pas ?)
+  Il ne faut pas les mettre directement dans results/, où sont déjà les *_results.json de la semaine 1. J'avais proposé results/saved_runs/ : on a pris results/scores/. Ces sauvegardes ne vont évidemment pas sur git (elles contiennent en plus des chemins absolus vers mon disque).
+- Le nom du fichier :
+  (Que doit contenir le nom ?)
+  Tout ce qui fait varier les scores : modèle, catégorie, graine du modèle. Sinon, un second lancement relit les scores du premier sans rien dire. split_seed n'y est pas, car il ne change pas les scores, seulement leur découpage. La normalisation est fixée à `false`, notée dans le fichier, et marqué `_raw` dans le nom du fichier (car lui aussi change les valeurs).
+- Le piège JSON :
+  (JSON relit les tuples comme des listes, et `set` refuse les listes. Comment corriger ?)
+  J'avais proposé d'enregistrer {validation: [...], test: [...]}. Mais le cache garde les 160 scores avant découpage, sinon il faudrait un fichier par split_seed, et la séparation en validation et test est suffisamment rapide. On reconstruit donc les tuples à la relecture, dans `load_scores` qui lit le JSON, et récupère les 160 scores qui sont représentés par une liste de dictionnaires (nécessaire pour JSON), où chaque tuple est recréé via le dictionnaire correspondant.
+- Format :
+  (Pourquoi du JSON suffit pour des floats ?)
+  Python écrit un float en JSON avec assez de chiffres pour retrouver exactement la même valeur à la relecture : les chiffres sont identiques au chiffre près, pas seulement proches. Un CSV en `:.3f` aurait arrondi les scores, et le seuil aurait pu changer.
+- Ce qu'on enregistre en plus des scores :
+  (Pourquoi `normalize: false` et la version d'anomalib ? Pourquoi `importlib.metadata` plutôt que `anomalib.__version__` ?)
+  Il nous faut d'autres informations pour être sûr que le score ne change pas :
+  - `normalize: false` : les scores changent en fonction des valeurs utilisées dans la normalisation, si celles ci sont différentes, elle rend les scores incomparables.
+  - la version d'anomalib : nous ne controlons pas les changements de code pour une librairie, si celui ci change, cela peut potentiellement affecter le score.
+  Nous avons utilisé `importlib.metadata` plutot que `anomalib.__version__` car l'import de la librairie `anomalib` est inutilement lourd et la CI n'installe pas cette librairie.
+- Le piège `path` :
+  (Quelle variable écrasait laquelle ? Qu'aurait-on perdu ?)
+  Dans `save_scores`, `path` était à l'origine le fichier JSON de sortie, mais la boucle réutilisait ce même nom pour le chemin de chaque image. À la fin de la boucle, `path` valait le chemin de la dernière image MVTec, et le JSON aurait écrasé cette image du dataset. Résolu en renommant la variable de la boucle `image_path`. `path` est un nom trop générique pour être réutilisé sans risque.
+
+## Les coûts dans OperatingPoint
+- L'idée :
+  (Pourquoi mettre `defect_rate`, `cost_fn` et `cost_fp` dans le point ?)
+  C'est moi qui ai posé la question avant de lancer l'étape 3 : ne fallait-il pas mettre defect_rate dans OperatingPoint ? Un point transporte maintenant les paramètres qui ont produit son `cost`, et `save_threshold` les lit dans le point au lieu de les recevoir à part. Un fichier qui mentirait devient impossible.
+- Les tests d'abord :
+  (Quels tests écrire ou modifier ?)
+  Modifier `test_save_and_load_roundtrip`, pour vérifier que les nouvelles données sont bien sauvegardées et rechargeables. On a ajouté `test_point_carries_its_cost_parameters`.
+- `save_threshold` :
+  (Que devient sa signature ? `{**asdict(point), "cost_fn": ...}` sert-il encore ?)
+  Non, `asdict` suffit, puisque tout est dans le point. La signature devient donc `save_threshold(point, path)` car comme dit précedemment les valeurs sont déjà dans point et les remettre pourrait mener à une erreur.
+
+## evaluate.py
+- Quel seuil pour la production :
+  (20 découpages, 20 seuils. Lequel écrire dans models/threshold.json ?)
+  Aucun des 20 : on peut prendre toutes les images. Les 20 découpages servent à mesurer honnêtement la performance. Une fois la mesure faite, plus besoin de garder la moitié des images de côté : le seuil final est choisi sur les 160.
+- scikit-learn et la CI :
+  (La CI n'installe ni anomalib ni scikit-learn. Que faire ?)
+  Ajouter scikit-learn à l'extra `dev` me semblait moins bricolé que l'importer dans la fonction et sauter les tests. Il est léger, et les tests du découpage tournent en CI. anomalib, lui, reste importé dans les fonctions.
+- Le découpage en fonctions :
+  (Rôle de `load_or_collect_scores`, `split_results`, `evaluate_split`, `summarize`, `main`.)
+  `load_or_collect_scores` vérifie que le calcul des scores concernant certains paramètres n'a pas été déjà fait pour éviter de relancer inutilement, il charge donc les scores si déjà produits sinon il lance le calcul, récupère puis sauvegarde les scores. 
+  `split_results` permet de découper en deux moitiés stratifiées (validation et test), où chaque type de défaut garde la même proportion dans les deux moitiés.
+  `evaluate_split` prend les scores pour les séparer en deux datasets avec `split_results`, puis il choisit en seuil en fonction de validation et ensuite évalue ce seuil sur validation et test, pour ainsi renvoyer deux `OperatingPoint` qui nous donnent les informations du seuil choisi (sur validation) pour le dataset de validation et de test.
+  `summarize` récupère une liste de points avec leurs valeurs, et renvoie la moyenne, le minimum, le maximum et l'écart-type de ces points.
+  `main` prend les arguments données (modèles, catégorie, seed, costs fn/fp, defect_rate, nombre de génération), et renvoie un résumé sur `n_splits` découpages (20 par défaut) avec `summarize` et les différentes fonctions si dessus, il choisit ensuite le seuil final parmi les 160 images et l'écrit dans `models/threshold.json`.
+- Les tests :
+  (Que prouve `test_logic_split_results` ? Pourquoi trois points construits à la main pour `summarize` ?)
+  Avec `test_logic_split_results`, je voulais vérifier que la répartion de `split_results` serait bien cohérentes et qu'elle prendrait bien en compte le type de défauts, ainsi que m'assurer que les répartitions sont distincts et qu'elles contiennent ensemble les scores en entrée.
+  Pour `summarize`, je voulais créer une liste de points et vérifier qu'on retrouve les valeurs exactes.
+  Avec `test_save_and_load`, on veut s'assurer que les scores soient bien sauvegardés et peuvent bien être chargés.
+- Le nom du rapport :
+  (Que se passait-il quand deux runs avec des paramètres différents écrivaient dans le même fichier ?)
+  Avant, un run avec d'autres coûts ou une autre graine écrasait le rapport précédent. Maintenant, tout ce qui change le résultat est dans le nom du fichier (modèle, catégorie, graine, `cost_fn`, `cost_fp`, `defect_rate`) : des paramètres différents donnent un rapport différent. Seul `n_splits`, qui joue sur la précision de la mesure plus que sur le résultat, est uniquement dans le rapport. Un run avec un autre `--n-splits` écrase donc encore le rapport, c'est un choix assumé.
+
+## ddof=1
+  (Écart-type de population ou d'échantillon ? Pourquoi le second ici ? De combien les chiffres ont-ils bougé par rapport à la séance 5 ?)
+  Il y a l'écart-type de population ou d'échantillon, le premier est plus utilisé quand nous avons une population bien définie et fini alors que le second, nous travaillons sur part représentative de celle ci. C'est pour cela que l'on va plutot utilisé la 2e pour plusieurs raisons, nous travaillons sur un échantillon représentatif d'un problème, et nous travaillons également sur plusieurs générations de split mais pas toutes celles possibles.
+  L'écart-type est multiplié par √(20/19) ≈ 1.026, soit +2.6 %. La raison précise : la moyenne est calculée sur les mêmes 20 valeurs, ce qui fait paraître l'écart à la moyenne trop petit. Diviser par n−1 corrige ce biais.
+
+## Le seuil final
+- Ma prédiction :
+  (Près du min, de la moyenne ou du max des 20 seuils ?)
+  Plus haut, car le max des bonnes pièces sera possiblement plus haut avec 41 bonnes pièces qu'avec 20.
+- Le résultat :
+  (32.20, contre une moyenne de 31.96 et un max de 33.14. Pourquoi ma prédiction n'est qu'à moitié juste ?)
+  Avec `cost_fn = 100` et `defect_rate = 0.01`, un défaut raté a un coefficient de 1 (= 100 x 0.01) alors qu'un faux rejet a un coefficient de 0.99. Les deux erreurs coûtent presque autant, donc le seuil cherche un compromis dans la zone où bonnes et mauvaises pièces se chevauchent (il rejette encore 3 bonnes pièces), il n'est pas collé au max des bonnes pièces. C'est pour cela qu'il est proche de la moyenne des 20 seuils. Avoir plus d'images rend le seuil plus stable, pas forcément plus haut. Mon raisonnement aurait été juste avec `cost_fn = 10`, où les faux rejets dominent.
+- Le piège de `threshold.json` :
+  (Pourquoi ne pas citer son rappel de 0.857 et ses 7.3 % de faux rejets ? Quels chiffres citer à la place ?)
+  Le seuil final est choisi et mesuré sur les mêmes 160 images : son rappel (0.857) et ses faux rejets (7.3 %) sont optimistes, comme la validation en séance 5. Les chiffres à citer sont ceux de reports/, mesurés sur des tests jamais vus : rappel 0.875 (0.797 à 0.983), faux rejets 14.1 % (0 à 28.6 %).
+
+## La CI rouge
+  (Qu'est-ce qui a cassé sur de3f4ac ? Comment l'éviter avant chaque commit ?)
+  J'avais écrit `name +=f"..."` sans espace après `+=`. `ruff format --check` le refuse, ce qui a fait échouer la CI (corrigé dans e6cedbf). Pour éviter cela, soit faire `ruff format .` avant chaque commit, soit installer un hook pre-commit.
+
+## Questions ouvertes
+- L'export ONNX sort-il des scores bruts, dans les mêmes unités que le seuil ?
+- `threshold.json` ne dit pas pour quel modèle ni quelle catégorie il a été calculé : faut-il l'ajouter ?
+- Déploierais-tu PatchCore sur screw avec 12.5 % de défauts ratés et 14 % de faux rejets ?
+- Faut-il ranger les *_results.json de la semaine 1 dans un sous-dossier de results/ ?
