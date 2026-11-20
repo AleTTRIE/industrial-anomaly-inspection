@@ -11,6 +11,9 @@ DATA_ROOT = Path(os.environ.get("DATA_ROOT", REPO_ROOT.parent / "datasets" / "MV
 # Training runs, checkpoints, exported models.
 RESULTS_DIR = Path(os.environ.get("RESULTS_DIR", REPO_ROOT / "results"))
 
+# Scratch directory for anomalib's export (it writes <dir>/weights/onnx/model.onnx).
+EXPORT_DIR = RESULTS_DIR / "export"
+
 # Figures and tables referenced by the README.
 REPORTS_DIR = REPO_ROOT / "reports"
 
@@ -27,3 +30,7 @@ CATEGORIES_TYPES = {
 }
 CATEGORIES = list(CATEGORIES_TYPES.keys())
 MODELS = ["patchcore", "padim"]
+
+# Input size the model was trained at (anomalib PatchCore pre-processor default).
+# Changing it requires retraining: the memory bank holds features at this scale.
+IMAGE_SIZE = (256, 256)

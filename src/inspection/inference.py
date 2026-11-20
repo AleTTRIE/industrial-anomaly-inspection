@@ -24,3 +24,27 @@ Questions à pouvoir expliquer ensuite :
 - Pourquoi servir le modèle avec ONNX Runtime plutôt qu'avec PyTorch ?
 - Que se passe-t-il si l'image envoyée à l'API n'a pas la même taille ?
 """
+
+import numpy as np
+from PIL import Image
+
+
+def preprocess(image: Image.Image, size=None) -> np.ndarray:
+    # 1. Load as RGB, then float32 in [0, 1]: shape (H, W, 3)
+    image = image.convert("RGB")
+    array = np.asarray(image).astype(np.float32) / 255.0
+
+    # 2. Optional resize, one channel at a time in PIL float mode ("F"): no rounding to uint8
+    if size is not None:
+        channels = []
+        for c in range(3):
+            channel = array[:, :, c]  # (H, W) float32
+            channel_image = Image.fromarray(channel)  # mode "F", because float32 2D
+            channel_image = channel_image.resize(size, Image.Resampling.BILINEAR)
+            channels.append(np.asarray(channel_image))  # back to numpy, (256, 256)
+        array = np.stack(channels, axis=2)
+
+    # 3. To (1, 3, H, W)
+    array = np.transpose(array, (2, 0, 1))
+    array = np.expand_dims(array, axis=0)
+    return array
