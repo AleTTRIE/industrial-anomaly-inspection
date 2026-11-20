@@ -27,11 +27,23 @@ from inspection.config import (
 from inspection.threshold import evaluate_threshold, save_threshold, select_threshold
 
 
+def build_model(model_name):
+    from anomalib.models import Padim, Patchcore
+    from anomalib.post_processing import PostProcessor
+
+    post_processor = PostProcessor(enable_normalization=False)
+    if model_name == "patchcore":
+        model = Patchcore(post_processor=post_processor)
+    elif model_name == "padim":
+        model = Padim(post_processor=post_processor)
+    else:
+        raise ValueError(f"Unsupported model: {model_name}")
+    return model
+
+
 def collect_scores(model_name, category, seed):
     from anomalib.data import MVTecAD
     from anomalib.engine import Engine
-    from anomalib.models import Padim, Patchcore
-    from anomalib.post_processing import PostProcessor
     from lightning import seed_everything
 
     seed_everything(seed)
@@ -40,13 +52,7 @@ def collect_scores(model_name, category, seed):
     datamodule = MVTecAD(root=DATA_ROOT, category=category, num_workers=0)
 
     # 2. Create the model
-    post_processor = PostProcessor(enable_normalization=False)
-    if model_name == "patchcore":
-        model = Patchcore(post_processor=post_processor)
-    elif model_name == "padim":
-        model = Padim(post_processor=post_processor)
-    else:
-        raise ValueError(f"Unsupported model: {model_name}")
+    model = build_model(model_name)
 
     # 3. Create the engine
     engine = Engine()
