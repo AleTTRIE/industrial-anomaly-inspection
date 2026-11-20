@@ -183,7 +183,7 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
   Dans le meme principe que dit précédemment, ce n'est pas le rôle de `train()` mais de l'appelant de décider de ce qu'il fait du résultat.
 - Imports :
   (Lesquels en haut du fichier, lesquels dans `train()`, et pourquoi ?)
-  On choisit d'importer les standarts et les imports léger en haut du script car ils sont léger à importer alors que les autres plus lourd, on préfère les importer si c'est vraiment nécessaire. L'autre raison est que certain import ne s'installe pas avec le CI, ce qui créerait des erreurs et ne lancerait rien.
+  On choisit d'importer les standards et les imports léger en haut du script car ils sont léger à importer alors que les autres plus lourd, on préfère les importer si c'est vraiment nécessaire. L'autre raison est que certain import ne s'installe pas avec le CI, ce qui créerait des erreurs et ne lancerait rien.
 - Code jamais exécuté :
   (L'histoire de `model.export`, et la règle que j'en tire.)
   Nous utilisions une méthode qui n'existait pas donc plutot que de la laisser et créer des erreurs si utilisé, nous l'avons enlevé.
@@ -557,3 +557,79 @@ La solution : .gitattributes avec * text=auto eol=lf. La règle est écrite dans
 - `threshold.json` ne dit pas pour quel modèle ni quelle catégorie il a été calculé : faut-il l'ajouter ?
 - Déploierais-tu PatchCore sur screw avec 12.5 % de défauts ratés et 14 % de faux rejets ?
 - Faut-il ranger les *_results.json de la semaine 1 dans un sous-dossier de results/ ?
+
+
+
+
+
+# Séance 7 : 16 et 17 novembre 2026, export ONNX
+
+## Ce que contient le fichier ONNX
+- Le graphe :
+  (Que trace l'export ? Pourquoi exporter avec enable_normalization=False ? Que faire de pred_label ?)
+  L'export trace ce que l'on appelle forward, càd le pre processing, le modèle puis le post processing. 
+  La raison du `enable_normalization=False` est que les scores normalisés sont écrêtés dans [0, 1] : un gros défaut et un défaut moyen peuvent tous les deux valoir 1, également le seuil a été mis à 0.5, ce qui rend la notion de distance encore un peu plus compliqué. La raison principale est que le seuil est choisi sur un score brut, donc avec les scores entre 0 et 1, le modèle dirait que tout est sans anomalie.
+  `pred_label` utilise le seuil d'anomalib (avec les scores normalisés), donc ca nous est pas utile. 
+- La taille :
+  (Ma prédiction, le calcul de la banque de mémoire, la taille réelle, d'où vient l'écart ?)
+  327 680 vecteurs, 10% des vecteurs pour le coreset, 1536 float/vecteur, 4 o/float, 1 Mo = 1e6 o
+  J'avais commencé par une erreur de compréhension et prédis un modèle de 0.13 Mo, ce qui n'est pas très réaliste, le problème venait de l'oublie qu'un vecteur n'est pas seulement un float de 4o mais 1536 float de 4o.
+  Sans mon oublie, la prévision était de 201Mo et la taille réelle était de 301Mo, l'écart vient du modèle utilisé pour extraire les vecteurs d'une image (ResNet).
+
+## Les pièges de l'export
+- onnxscript :
+  (Pourquoi l'extra train et pas serve ?)
+  La partie export ne se fait que sur la machine, il utilise des librairies comme torch et onnxscript qui en est une dépendance. Alors que l'API dans Docker, ne fait que lire le fichier .onnx avec onnxruntime. Et serve est gardé léger exprès, sans torch, on laisse le plus lourd sur la machine avec train.
+- Le fichier .data :
+  (Pourquoi le move a cassé le modèle ? Pourquoi fusionner plutôt que déplacer deux fichiers ?)
+  Pour pouvoir utiliser le modèle sous onnx, quand ce n'est pas fusionné, il faut les deux, sauf que le move ne déplacait que le graphe et pas le .data.
+  Fusionner nous permet d'oublier la gestion des deux fichiers à la fois, et évite les oublis.
+  Le nom du .data est écrit dans le graphe, donc renommer model.onnx casse le lien
+- La taille de lot figée à 2 :
+  (Pourquoi regarder les formes n'a pas suffi ? Pourquoi `dynamic_shapes=None` ?)
+  Regarder les formes ne suffisait pas : le 2 était bien affiché, mais rien ne plante tant qu'on n'appelle pas le modèle. Seul un vrai appel avec une image (`Got: 1 Expected: 2`) a révélé le problème. L'API et le benchmark envoient une image à la fois, ils auraient planté. `dynamic_shapes=None` dit à l'exporteur qu'aucune dimension n'est dynamique : il trace avec un exemple `[1, 3, 256, 256]`, donc la taille de lot vaut 1 par construction, et non 2 par accident.
+- L'entrée fixe en 256 :
+  (Que se passe-t-il maintenant si on envoie une image de 1024 ? Pourquoi c'est mieux qu'une entrée dynamique ?)
+  Mettre en autre chose que 256 causera une erreur.
+  C'est mieux de mettre une entrée statique pour éviter des erreurs.
+  Avant, une image de 1024 donnait un score faux de 8 points sans aucune erreur ; maintenant, elle plante tout de suite.
+
+## Les scores : brut, mais identiques ?
+- Ma prédiction :
+  (Écart nul ?)
+  Je ne connaissais pas les méthodes utilisées par anomalib donc je pensais qu'en utilisant les standards, l'écart serait probablement nul.
+- Les quatre prétraitements :
+  | Prétraitement | Écart max | Décisions changées |
+  |---|---|---|
+  | aucun (Resize du graphe) | 8.62 | 33 |
+  | PIL uint8 | 2.20 | 3 |
+  | torchvision float | 0.119 | 0 |
+  | PIL "F" (retenu)| 0.119 | 0 |
+- Pourquoi le Resize du graphe était faux :
+  (Antialiasing : qu'est-ce que c'est, pourquoi ça compte sur une réduction de 1024 à 256 ?)
+  En réduisant d'un facteur 4, chaque pixel de sortie représente 4 × 4 = 16 pixels d'origine : sans antialiasing, le bilinéaire n'en lit que 4 et ignore les 12 autres. Pour une réduction de 1.1, presque aucun pixel n'est ignoré, donc l'effet est faible. Les filets de la vis sont des motifs fins et répétés, exactement ce qui se transforme en faux motifs (crénelage). Résultat : 8.6 points d'écart et 33 décisions changées.
+- Pourquoi PIL uint8 ne suffisait pas :
+  (Arrondi, et pourquoi PatchCore y est sensible.)
+  Le problème, c'est qu'il faut faire pareil qu'à l'entrainement pour obtenir les mêmes résultats, anomalib a redimensionné en float alors que PIL arrondit à l'entier.
+  PatchCore y est sensible car son score est un maximum sur les patchs, il suffit qu'un seul patch bouge, les scores bougent nécessairement. PIL "F" utilise le même filtre, mais sans arrondi, et retrouve le résultat de torchvision. Donc la cause était l'arrondi.
+- Les 0.12 restants :
+  (Biais ou bruit ? D'où viennent-ils probablement ? Pourquoi c'est acceptable ?)
+  Le 0.12 est du bruit, il provient probablement du traitement GPU car avec le pré traitement nous avions noté une différence d'environ 1e-5 ce qui le met hors de cause.
+  Tant que les résultats ne différent pas, c'est acceptable, je parle ici des décisions/détections.
+  Le problème serait qu'un score soit à 0.12 du seuil et avec le bruit, ca pourrait changer la décision.
+- Le piège resize :
+  (Pourquoi des chiffres identiques au millionième étaient un signal ?)
+  C'était un signal, car ca impliquait qu'il n'y avait pas de modification, meme minime, car nous avons des scores qui sont plutôt précis donc ca se verait. Quand une modification ne change rien au chiffre près, vérifier d'abord qu'elle s'exécute vraiment.
+
+## preprocess et IMAGE_SIZE
+  (Pourquoi preprocess prend une image et pas un chemin ? Pourquoi dans inference.py ? Pourquoi 256 est une propriété du modèle et pas des images ?)
+  La fonction `preprocess` prend plutot une image car l'API va nous envoyer une et pas un chemin, c'est donc plus logique. Séparer `load_image` et la partie de `preprocess` permet d'éviter d'avoir deux mêmes copies du code, de plus, ils ont deux objectifs différents, c'est donc aussi logique de les séparer. 
+  Il est écrit dans `inference.py` car comme le dit son `preprocess` est une étape avant les traitements principaux, et va être principalement utilisé pour les images durant l'inférence, car dans train par exemple, on utilise anomalib et les datasets directement. Vu que la fonction aurait été la même que celle utilisé dans `inference.py`, on l'y a placé, aussi `inference.py` n'importe pas de lourdes librairies
+  256 est une propriété du modèle entraîné : pendant le fit, toutes les images ont été réduites à 256, et la banque de mémoire contient des patchs vus à cette échelle. À une autre échelle, chaque patch couvre une autre zone de la vis, les caractéristiques changent, donc les distances et les scores aussi. La taille des images d'entrée (700, 900 ou 1024 selon la catégorie) n'a pas d'importance, puisqu'elles sont toutes ramenées à 256. Revers : un défaut de quelques pixels en 1024 peut disparaître en 256.
+
+## Questions ouvertes
+- threshold.json ne dit pas pour quel modèle ni quelle catégorie il a été calculé ;
+- déploierais-tu PatchCore sur screw ?
+- faut-il ranger les *_results.json de la semaine 1 ?
+- AnomalyModel devrait-il lire la taille d'entrée directement dans le .onnx ?
+- les 0.12 viennent-ils vraiment du TF32 ? (vérifiable en désactivant TF32 et en recalculant le cache.)
